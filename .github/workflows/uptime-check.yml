@@ -1,4 +1,4 @@
-name: Infrastructure Uptime Monitor
+name: Infrastructure Uptime Monitor V2
 
 on:
   schedule:
