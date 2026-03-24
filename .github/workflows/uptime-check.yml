@@ -1,0 +1,29 @@
+name: Infrastructure Uptime Monitor
+
+on:
+  schedule:
+     - cron: '*/30 * * * *'
+  workflow_dispatch: 
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install resend ts-node typescript @types/node @supabase/supabase-js
+
+      - name: Run Monitor
+        env:
+          # Estos 3 deben estar en Settings > Secrets > Actions del Repo
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: npx ts-node src/lib/monitor.ts
