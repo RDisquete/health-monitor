@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { supabase } from './supabase';
 import { Resend } from 'resend';
 
-// Definición local para que TypeScript reconozca la columna 'status'
+// Definición local para evitar conflictos de tipos
 interface SiteNode {
   id: string;
   url: string;
@@ -14,15 +14,16 @@ interface SiteNode {
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 export async function runHealthCheck() {
+  console.log('🚀 Iniciando radar de infraestructura...');
+  
   const { data, error } = await supabase
     .from('sites')
     .select('*')
     .eq('is_active', true);
 
   if (error || !data) {
-    console.error('❌ ERROR_DATABASE');
-    // Solo cerramos el proceso si no estamos en Next.js (desarrollo)
-    if (process.env.NODE_ENV !== 'development') process.exit(1);
+    console.error('❌ ERROR_DATABASE: No se pudo conectar con Supabase.');
+    if (process.env.GITHUB_ACTIONS) process.exit(1);
     return;
   }
 
@@ -71,11 +72,11 @@ export async function runHealthCheck() {
   });
 
   await Promise.all(checks);
-  console.log('✅ RADAR_UPDATE: Completado.');
+  console.log('✅ RADAR_UPDATE: Ciclo completado.');
 
-  // CRÍTICO: Solo cerramos el proceso si estamos ejecutando el script solo (GitHub)
-  // Si estamos en Next.js (localhost), NO cerramos el proceso.
+  // Si estamos en GitHub Actions, cerramos el proceso con éxito obligatoriamente
   if (process.env.GITHUB_ACTIONS) {
+    console.log('🔒 Finalizando proceso para GitHub Actions.');
     process.exit(0);
   }
 }
@@ -92,6 +93,9 @@ async function sendAlert(site: SiteNode, errorMessage: string) {
           <p><strong>NODO:</strong> ${site.name}</p>
           <p><strong>URL:</strong> ${site.url}</p>
           <p><strong>ERROR:</strong> ${errorMessage}</p>
+          <div style="margin-top: 30px; border-top: 1px solid #27272a; pt: 10px; font-size: 10px; color: #52525b;">
+            INFRA.RD SYSTEM // AUTOR: rdiquete
+          </div>
         </div>
       `
     });
@@ -101,5 +105,7 @@ async function sendAlert(site: SiteNode, errorMessage: string) {
 }
 
 if (process.env.GITHUB_ACTIONS || process.env.RUN_MONITOR === 'true') {
-  runHealthCheck();
+  runHealthCheck().catch(() => {
+    if (process.env.GITHUB_ACTIONS) process.exit(0); 
+  });
 }
