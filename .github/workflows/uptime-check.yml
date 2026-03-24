@@ -2,7 +2,7 @@ name: Infrastructure Uptime Monitor
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '*/30 * * * *' 
   workflow_dispatch: 
 
 jobs:
@@ -26,5 +26,4 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-        # Usamos tsx para que Next.js 15 no se pelee con los tipos de módulo
         run: npx tsx src/lib/monitor.ts
