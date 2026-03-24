@@ -2,7 +2,7 @@ name: Infrastructure Uptime Monitor
 
 on:
   schedule:
-     - cron: '*/30 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch: 
 
 jobs:
@@ -22,8 +22,7 @@ jobs:
 
       - name: Run Monitor
         env:
-          # Estos 3 deben estar en Settings > Secrets > Actions del Repo
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          RESEND_API_KEY: ${{secrets.RESEND_API_KEY}}
+          NEXT_PUBLIC_SUPABASE_URL: ${{secrets.NEXT_PUBLIC_SUPABASE_URL}}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY}}
         run: npx ts-node src/lib/monitor.ts

@@ -8,29 +8,21 @@ type RedirectRoutes = never
 type RewriteRoutes = never
 type Routes = AppRoutes | PageRoutes | LayoutRoutes | RedirectRoutes | RewriteRoutes
 
-
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 interface ParamMap {
 }
 
-
 export type ParamsOf<Route extends Routes> = ParamMap[Route]
 
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 interface LayoutSlotMap {
 }
-
 
 export type { AppRoutes, PageRoutes, LayoutRoutes, RedirectRoutes, RewriteRoutes, ParamMap }
 
 declare global {
   /**
    * Props for Next.js App Router page components
-   * @example
-   * ```tsx
-   * export default function Page(props: PageProps<'/blog/[slug]'>) {
-   *   const { slug } = await props.params
-   *   return <div>Blog post: {slug}</div>
-   * }
-   * ```
    */
   interface PageProps<AppRoute extends AppRoutes> {
     params: Promise<ParamMap[AppRoute]>
@@ -39,12 +31,6 @@ declare global {
 
   /**
    * Props for Next.js App Router layout components
-   * @example
-   * ```tsx
-   * export default function Layout(props: LayoutProps<'/dashboard'>) {
-   *   return <div>{props.children}</div>
-   * }
-   * ```
    */
   type LayoutProps<LayoutRoute extends LayoutRoutes> = {
     params: Promise<ParamMap[LayoutRoute]>
