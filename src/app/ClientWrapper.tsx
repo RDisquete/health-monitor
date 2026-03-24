@@ -155,7 +155,7 @@ export default function ClientWrapper({ sites, avgLatency, systemStatus }: Props
                   <span className="text-[10px] font-mono text-blue-500 uppercase tracking-[0.5em] mb-4 block">Detail_Diagnostic_Buffer</span>
                   <h3 className={`text-7xl font-black tracking-tighter uppercase ${theme.title}`}>{selectedSite.name}</h3>
                 </div>
-                <button onClick={() => setSelectedSite(null)} className="cursor-pointer opacity-20 hover:opacity-100 text-3xl font-light transition-all hover:scale-110">CLOSE_×</button>
+
               </div>
 
               <div className="flex items-end gap-1 h-72 bg-zinc-900/10 rounded-none p-4 mb-20 border border-zinc-800/50">
