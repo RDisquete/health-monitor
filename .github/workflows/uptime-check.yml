@@ -16,13 +16,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm' 
 
       - name: Install dependencies
-        run: npm install resend ts-node typescript @types/node @supabase/supabase-js
+        run: npm install 
 
       - name: Run Monitor
         env:
-          RESEND_API_KEY: ${{secrets.RESEND_API_KEY}}
-          NEXT_PUBLIC_SUPABASE_URL: ${{secrets.NEXT_PUBLIC_SUPABASE_URL}}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY}}
-        run: npx ts-node src/lib/monitor.ts
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: npx ts-node --project tsconfig.json src/lib/monitor.ts
