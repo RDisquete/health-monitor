@@ -1,36 +1,50 @@
 import 'dotenv/config';
 import { supabase } from './supabase';
-import { Site } from '../types/validator';
 import { Resend } from 'resend';
+
+// Definición local para que TypeScript reconozca la columna 'status'
+interface SiteNode {
+  id: string;
+  url: string;
+  name: string;
+  is_active: boolean;
+  status: string;
+}
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 export async function runHealthCheck() {
-  const { data: sites, error } = await supabase
+  const { data, error } = await supabase
     .from('sites')
     .select('*')
     .eq('is_active', true);
 
-  if (error || !sites) {
-    console.error('❌ ERROR_DATABASE: No se pudo conectar con Supabase.');
-    return;
+  if (error || !data) {
+    console.error('❌ ERROR_DATABASE');
+    process.exit(1);
   }
 
-  console.log(`📡 RADAR_ACTIVE: Escaneando ${sites.length} servicios...`);
+  const sites = data as unknown as SiteNode[];
+  console.log(`📡 RADAR: Escaneando ${sites.length} servicios...`);
 
-  const checks = sites.map(async (site: Site) => {
+  const checks = sites.map(async (site) => {
     const start = Date.now();
     try {
       const response = await fetch(site.url, { 
         method: 'GET', 
-        cache: 'no-store'
+        cache: 'no-store',
+        headers: { 'User-Agent': 'InfraRD-Monitor/1.0' }
       });
       
       const latency = Date.now() - start;
       const isDown = !response.ok;
 
-      if (isDown) {
+      if (isDown && site.status !== 'DOWN') {
         await sendAlert(site, `HTTP_${response.status}`);
+        await supabase.from('sites').update({ status: 'DOWN' }).eq('id', site.id);
+      } 
+      else if (!isDown && site.status === 'DOWN') {
+        await supabase.from('sites').update({ status: 'OK' }).eq('id', site.id);
       }
       
       return supabase.from('health_checks').insert({
@@ -40,9 +54,13 @@ export async function runHealthCheck() {
       });
 
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : 'CONNECTION_ERROR';
-      await sendAlert(site, errorMessage);
+      // Solución al error de ESLint: manejamos el error como unknown
+      const errorMessage = err instanceof Error ? err.message : 'FETCH_FAILED';
       
+      if (site.status !== 'DOWN') {
+        await sendAlert(site, errorMessage);
+        await supabase.from('sites').update({ status: 'DOWN' }).eq('id', site.id);
+      }
       return supabase.from('health_checks').insert({
         site_id: site.id,
         latency: 0,
@@ -52,10 +70,11 @@ export async function runHealthCheck() {
   });
 
   await Promise.all(checks);
-  console.log('✅ RADAR_UPDATE: Ciclo completado.');
+  console.log('✅ RADAR_UPDATE: Completado.');
+  process.exit(0);
 }
 
-async function sendAlert(site: Site, errorMessage: string) {
+async function sendAlert(site: SiteNode, errorMessage: string) {
   try {
     await resend.emails.send({
       from: 'InfraRD Monitor <onboarding@resend.dev>',
@@ -67,14 +86,11 @@ async function sendAlert(site: Site, errorMessage: string) {
           <p><strong>NODO:</strong> ${site.name}</p>
           <p><strong>URL:</strong> ${site.url}</p>
           <p><strong>ERROR:</strong> ${errorMessage}</p>
-          <div style="margin-top: 30px; border-top: 1px solid #27272a; pt: 10px; font-size: 10px; color: #52525b;">
-            INFRA.RD SYSTEM // AUTOR: rdiquete
-          </div>
         </div>
       `
     });
   } catch (e) {
-    console.error('❌ Error envío email:', e);
+    console.error('❌ Error Email:', e);
   }
 }
 
