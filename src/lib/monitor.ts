@@ -21,7 +21,9 @@ export async function runHealthCheck() {
 
   if (error || !data) {
     console.error('❌ ERROR_DATABASE');
-    process.exit(1);
+    // Solo cerramos el proceso si no estamos en Next.js (desarrollo)
+    if (process.env.NODE_ENV !== 'development') process.exit(1);
+    return;
   }
 
   const sites = data as unknown as SiteNode[];
@@ -54,7 +56,6 @@ export async function runHealthCheck() {
       });
 
     } catch (err: unknown) {
-      // Solución al error de ESLint: manejamos el error como unknown
       const errorMessage = err instanceof Error ? err.message : 'FETCH_FAILED';
       
       if (site.status !== 'DOWN') {
@@ -71,7 +72,12 @@ export async function runHealthCheck() {
 
   await Promise.all(checks);
   console.log('✅ RADAR_UPDATE: Completado.');
-  process.exit(0);
+
+  // CRÍTICO: Solo cerramos el proceso si estamos ejecutando el script solo (GitHub)
+  // Si estamos en Next.js (localhost), NO cerramos el proceso.
+  if (process.env.GITHUB_ACTIONS) {
+    process.exit(0);
+  }
 }
 
 async function sendAlert(site: SiteNode, errorMessage: string) {
@@ -94,4 +100,6 @@ async function sendAlert(site: SiteNode, errorMessage: string) {
   }
 }
 
-runHealthCheck();
+if (process.env.GITHUB_ACTIONS || process.env.RUN_MONITOR === 'true') {
+  runHealthCheck();
+}
