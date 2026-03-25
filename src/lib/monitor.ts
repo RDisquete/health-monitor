@@ -2,7 +2,6 @@ import 'dotenv/config';
 import { supabase } from './supabase';
 import { Resend } from 'resend';
 
-// Definición local para evitar conflictos de tipos
 interface SiteNode {
   id: string;
   url: string;
@@ -16,7 +15,6 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 export async function runHealthCheck() {
   console.log('🚀 Iniciando radar de infraestructura...');
 
-  // 1. Obtenemos los sitios activos
   const { data, error } = await supabase
     .from('sites')
     .select('*')
@@ -28,40 +26,38 @@ export async function runHealthCheck() {
     return;
   }
 
-  if (!data || data.length === 0) {
-    console.log('⚠️ RADAR: No hay sitios activos para escanear en la tabla "sites".');
-    if (process.env.GITHUB_ACTIONS) process.exit(0);
-    return;
-  }
-
-  const sites = data as unknown as SiteNode[];
+  const sites = (data as unknown as SiteNode[]) || [];
   console.log(`📡 RADAR: Escaneando ${sites.length} servicios activos...`);
 
-  // 2. Ejecutamos los checks en paralelo
   const checks = sites.map(async (site) => {
     const start = Date.now();
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    // Aumentamos a 20s para dar margen a webs lentas
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
 
     try {
-      const response = await fetch(site.url, { 
+      // Modificamos el fetch con headers más realistas para evitar bloqueos
+      const response = await fetch(site.url.trim(), { 
         method: 'GET', 
         cache: 'no-store',
         signal: controller.signal,
         headers: { 
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': '*/*'
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+          'Accept-Language': 'es-ES,es;q=0.9',
+          'Cache-Control': 'no-cache'
         }
       });
 
       clearTimeout(timeoutId);
       const latency = Date.now() - start;
-      const isDown = !response.ok;
+      
+      // Consideramos caído si el status es >= 500 o fallos de red (4xx suelen estar UP)
+      const isDown = response.status >= 500;
 
-      // Actualizar estado en Supabase si cambia
       if (isDown && site.status !== 'DOWN') {
         console.log(`🚨 FALLO: ${site.name} (${response.status})`);
-        await sendAlert(site, `HTTP_${response.status}`);
+        await sendAlert(site, `HTTP_STATUS_${response.status}`);
         await supabase.from('sites').update({ status: 'DOWN' }).eq('id', site.id);
       } 
       else if (!isDown && site.status === 'DOWN') {
@@ -69,26 +65,24 @@ export async function runHealthCheck() {
         await supabase.from('sites').update({ status: 'OK' }).eq('id', site.id);
       }
 
-      // 3. Insertar log de salud
-      const { error: insertError } = await supabase.from('health_checks').insert({
+      await supabase.from('health_checks').insert({
         site_id: site.id,
         latency: latency,
         status_code: response.status
       });
 
-      if (insertError) console.error(`❌ Error insertando log para ${site.name}:`, insertError.message);
-
     } catch (err: unknown) {
       clearTimeout(timeoutId);
       
-      // FIX: Tipado seguro para el error sin usar 'any'
+      // LOG DE DEPURACIÓN CRÍTICO: Aquí verás por qué marca 2ms
+      console.error(`❌ DEBUG_DETAILS [${site.name}]:`, err);
+
       let errorMessage = 'FETCH_FAILED';
       if (err instanceof Error) {
         errorMessage = err.name === 'AbortError' ? 'TIMEOUT_EXCEEDED' : err.message;
       }
       
-      console.log(`❌ ERROR en ${site.name}: ${errorMessage}`);
-
+      // Solo enviamos alerta si no estaba ya marcado como DOWN
       if (site.status !== 'DOWN') {
         await sendAlert(site, errorMessage);
         await supabase.from('sites').update({ status: 'DOWN' }).eq('id', site.id);
@@ -96,8 +90,8 @@ export async function runHealthCheck() {
 
       await supabase.from('health_checks').insert({
         site_id: site.id,
-        latency: 0,
-        status_code: 500
+        latency: Date.now() - start, // Esto marcará los 2ms reales
+        status_code: 0 // 0 indica error de red/fetch
       });
     }
   });
@@ -105,9 +99,7 @@ export async function runHealthCheck() {
   await Promise.all(checks);
   console.log('✅ RADAR_UPDATE: Ciclo completado.');
 
-  if (process.env.GITHUB_ACTIONS) {
-    process.exit(0);
-  }
+  if (process.env.GITHUB_ACTIONS) process.exit(0);
 }
 
 async function sendAlert(site: SiteNode, errorMessage: string) {
@@ -123,7 +115,7 @@ async function sendAlert(site: SiteNode, errorMessage: string) {
           <p><strong>URL:</strong> ${site.url}</p>
           <p><strong>ERROR:</strong> ${errorMessage}</p>
           <div style="margin-top: 30px; border-top: 1px solid #27272a; padding-top: 10px; font-size: 10px; color: #52525b;">
-            INFRA.RD SYSTEM // AUTOR: rdiquete
+            INFRA.RD SYSTEM // OPERATOR: rdiquete
           </div>
         </div>
       `
@@ -134,7 +126,5 @@ async function sendAlert(site: SiteNode, errorMessage: string) {
 }
 
 if (process.env.GITHUB_ACTIONS || process.env.RUN_MONITOR === 'true') {
-  runHealthCheck().catch(() => {
-    if (process.env.GITHUB_ACTIONS) process.exit(0); 
-  });
+  runHealthCheck().catch(console.error);
 }
