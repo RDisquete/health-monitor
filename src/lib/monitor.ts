@@ -15,25 +15,31 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 export async function runHealthCheck() {
   console.log('🚀 Iniciando radar de infraestructura...');
-  
+
+  // 1. Obtenemos los sitios activos
   const { data, error } = await supabase
     .from('sites')
     .select('*')
     .eq('is_active', true);
 
-  if (error || !data) {
-    console.error('❌ ERROR_DATABASE: No se pudo conectar con Supabase.');
-    if (process.env.GITHUB_ACTIONS) process.exit(0); // Salida limpia para GH Actions
+  if (error) {
+    console.error('❌ ERROR_DATABASE:', error.message);
+    if (process.env.GITHUB_ACTIONS) process.exit(0);
+    return;
+  }
+
+  if (!data || data.length === 0) {
+    console.log('⚠️ RADAR: No hay sitios activos para escanear en la tabla "sites".');
+    if (process.env.GITHUB_ACTIONS) process.exit(0);
     return;
   }
 
   const sites = data as unknown as SiteNode[];
-  console.log(`📡 RADAR: Escaneando ${sites.length} servicios...`);
+  console.log(`📡 RADAR: Escaneando ${sites.length} servicios activos...`);
 
+  // 2. Ejecutamos los checks en paralelo
   const checks = sites.map(async (site) => {
     const start = Date.now();
-    
-    // Configuración de AbortController para evitar cuelgues (10 segundos)
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
 
@@ -43,20 +49,18 @@ export async function runHealthCheck() {
         cache: 'no-store',
         signal: controller.signal,
         headers: { 
-          // Disfraz de navegador para saltar bloqueos y problemas de micro/permisos
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+          'Accept': '*/*'
         }
       });
-      
+
       clearTimeout(timeoutId);
       const latency = Date.now() - start;
-      
-      // Consideramos UP si el status es exitoso (200-399)
       const isDown = !response.ok;
 
+      // Actualizar estado en Supabase si cambia
       if (isDown && site.status !== 'DOWN') {
-        console.log(`🚨 FALLO: ${site.name} responde con ${response.status}`);
+        console.log(`🚨 FALLO: ${site.name} (${response.status})`);
         await sendAlert(site, `HTTP_${response.status}`);
         await supabase.from('sites').update({ status: 'DOWN' }).eq('id', site.id);
       } 
@@ -64,17 +68,19 @@ export async function runHealthCheck() {
         console.log(`✅ RECUPERADO: ${site.name}`);
         await supabase.from('sites').update({ status: 'OK' }).eq('id', site.id);
       }
-      
-      return supabase.from('health_checks').insert({
+
+      // 3. Insertar log de salud (Importante: verificamos si hay error aquí)
+      const { error: insertError } = await supabase.from('health_checks').insert({
         site_id: site.id,
         latency: latency,
         status_code: response.status
       });
 
+      if (insertError) console.error(`❌ Error insertando log para ${site.name}:`, insertError.message);
+
     } catch (err: any) {
       clearTimeout(timeoutId);
       const errorMessage = err.name === 'AbortError' ? 'TIMEOUT_EXCEEDED' : (err.message || 'FETCH_FAILED');
-      
       console.log(`❌ ERROR en ${site.name}: ${errorMessage}`);
 
       if (site.status !== 'DOWN') {
@@ -82,7 +88,7 @@ export async function runHealthCheck() {
         await supabase.from('sites').update({ status: 'DOWN' }).eq('id', site.id);
       }
 
-      return supabase.from('health_checks').insert({
+      await supabase.from('health_checks').insert({
         site_id: site.id,
         latency: 0,
         status_code: 500
@@ -94,7 +100,6 @@ export async function runHealthCheck() {
   console.log('✅ RADAR_UPDATE: Ciclo completado.');
 
   if (process.env.GITHUB_ACTIONS) {
-    console.log('🔒 Proceso finalizado con éxito para GitHub.');
     process.exit(0);
   }
 }
@@ -122,7 +127,6 @@ async function sendAlert(site: SiteNode, errorMessage: string) {
   }
 }
 
-// Ejecución automática
 if (process.env.GITHUB_ACTIONS || process.env.RUN_MONITOR === 'true') {
   runHealthCheck().catch(() => {
     if (process.env.GITHUB_ACTIONS) process.exit(0); 
