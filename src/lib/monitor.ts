@@ -15,55 +15,80 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 export async function runHealthCheck() {
   console.log('🚀 Iniciando radar de infraestructura...');
-  
+
+  // 1. Obtenemos los sitios activos
   const { data, error } = await supabase
     .from('sites')
     .select('*')
     .eq('is_active', true);
 
-  if (error || !data) {
-    console.error('❌ ERROR_DATABASE: No se pudo conectar con Supabase.');
-    if (process.env.GITHUB_ACTIONS) process.exit(1);
+  if (error) {
+    console.error('❌ ERROR_DATABASE:', error.message);
+    if (process.env.GITHUB_ACTIONS) process.exit(0);
+    return;
+  }
+
+  if (!data || data.length === 0) {
+    console.log('⚠️ RADAR: No hay sitios activos para escanear en la tabla "sites".');
+    if (process.env.GITHUB_ACTIONS) process.exit(0);
     return;
   }
 
   const sites = data as unknown as SiteNode[];
-  console.log(`📡 RADAR: Escaneando ${sites.length} servicios...`);
+  console.log(`📡 RADAR: Escaneando ${sites.length} servicios activos...`);
 
+  // 2. Ejecutamos los checks en paralelo
   const checks = sites.map(async (site) => {
     const start = Date.now();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
     try {
       const response = await fetch(site.url, { 
         method: 'GET', 
         cache: 'no-store',
-        headers: { 'User-Agent': 'InfraRD-Monitor/1.0' }
+        signal: controller.signal,
+        headers: { 
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': '*/*'
+        }
       });
-      
+
+      clearTimeout(timeoutId);
       const latency = Date.now() - start;
       const isDown = !response.ok;
 
+      // Actualizar estado en Supabase si cambia
       if (isDown && site.status !== 'DOWN') {
+        console.log(`🚨 FALLO: ${site.name} (${response.status})`);
         await sendAlert(site, `HTTP_${response.status}`);
         await supabase.from('sites').update({ status: 'DOWN' }).eq('id', site.id);
       } 
       else if (!isDown && site.status === 'DOWN') {
+        console.log(`✅ RECUPERADO: ${site.name}`);
         await supabase.from('sites').update({ status: 'OK' }).eq('id', site.id);
       }
-      
-      return supabase.from('health_checks').insert({
+
+      // 3. Insertar log de salud (Importante: verificamos si hay error aquí)
+      const { error: insertError } = await supabase.from('health_checks').insert({
         site_id: site.id,
         latency: latency,
         status_code: response.status
       });
 
-    } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : 'FETCH_FAILED';
-      
+      if (insertError) console.error(`❌ Error insertando log para ${site.name}:`, insertError.message);
+
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      const errorMessage = err.name === 'AbortError' ? 'TIMEOUT_EXCEEDED' : (err.message || 'FETCH_FAILED');
+      console.log(`❌ ERROR en ${site.name}: ${errorMessage}`);
+
       if (site.status !== 'DOWN') {
         await sendAlert(site, errorMessage);
         await supabase.from('sites').update({ status: 'DOWN' }).eq('id', site.id);
       }
-      return supabase.from('health_checks').insert({
+
+      await supabase.from('health_checks').insert({
         site_id: site.id,
         latency: 0,
         status_code: 500
@@ -74,9 +99,7 @@ export async function runHealthCheck() {
   await Promise.all(checks);
   console.log('✅ RADAR_UPDATE: Ciclo completado.');
 
-  // Si estamos en GitHub Actions, cerramos el proceso con éxito obligatoriamente
   if (process.env.GITHUB_ACTIONS) {
-    console.log('🔒 Finalizando proceso para GitHub Actions.');
     process.exit(0);
   }
 }
@@ -93,7 +116,7 @@ async function sendAlert(site: SiteNode, errorMessage: string) {
           <p><strong>NODO:</strong> ${site.name}</p>
           <p><strong>URL:</strong> ${site.url}</p>
           <p><strong>ERROR:</strong> ${errorMessage}</p>
-          <div style="margin-top: 30px; border-top: 1px solid #27272a; pt: 10px; font-size: 10px; color: #52525b;">
+          <div style="margin-top: 30px; border-top: 1px solid #27272a; padding-top: 10px; font-size: 10px; color: #52525b;">
             INFRA.RD SYSTEM // AUTOR: rdiquete
           </div>
         </div>
