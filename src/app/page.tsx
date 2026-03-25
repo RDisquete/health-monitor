@@ -25,13 +25,13 @@ export default async function HomePage() {
       )
     `)
     .eq('is_active', true)
-    .order('created_at', { ascending: true });
+    // CAMBIO 1: Ordenamos por ID para que coincida siempre con el log del monitor
+    .order('id', { ascending: true }); 
 
   if (error) {
     console.error("❌ Error fetching sites:", error);
   }
 
-  // Convertimos a unknown primero como sugiere el error 2352
   const typedSites = (data as unknown as Site[]) || [];
   
   const allChecks = typedSites.flatMap(s => s.health_checks || []);
@@ -43,6 +43,7 @@ export default async function HomePage() {
     const checks = s.health_checks;
     if (!checks || checks.length === 0) return false;
 
+    // Ordenamos checks por fecha para sacar el más reciente
     const sorted = [...checks].sort((a, b) => 
       new Date(b.checked_at).getTime() - new Date(a.checked_at).getTime()
     );
@@ -51,22 +52,27 @@ export default async function HomePage() {
 
     if (!lastCheck || !lastCheck.status_code) return false;
     
-    return lastCheck.status_code < 200 || lastCheck.status_code >= 400;
+    // Un sitio está DOWN solo si el status es 500+ (coincidiendo con tu monitor)
+    return lastCheck.status_code >= 500;
   }).length;
 
   const systemStatus = downSites === 0 ? 'NOMINAL' : 'ISSUES';
 
   return (
     <main className="min-h-screen bg-[#050505] text-zinc-400 font-mono">
+      {/* AQUÍ ESTÁ LA CLAVE: 
+          Si el desborde sigue, el cambio gordo hay que hacerlo 
+          DENTRO de <ClientWrapper /> o en el componente de la Card.
+      */}
       <ClientWrapper 
         sites={typedSites} 
         avgLatency={avgLatency} 
         systemStatus={systemStatus} 
       />
       
-      <footer className="max-w-7xl mx-auto px-6 py-8 border-t border-zinc-900 text-[10px] flex justify-between">
+      <footer className="max-w-7xl mx-auto px-6 py-8 border-t border-zinc-900 text-[10px] flex justify-between uppercase">
         <span>INFRA.RD MONITOR SYSTEM v2.0</span>
-        <span className="text-zinc-600">OPERATOR: RDIQUETE</span>
+        <span className="text-zinc-600">OPERATOR: {process.env.NEXT_PUBLIC_OPERATOR || 'RDIQUETE'}</span>
       </footer>
     </main>
   );
