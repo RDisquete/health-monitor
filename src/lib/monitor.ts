@@ -69,7 +69,7 @@ export async function runHealthCheck() {
         await supabase.from('sites').update({ status: 'OK' }).eq('id', site.id);
       }
 
-      // 3. Insertar log de salud (Importante: verificamos si hay error aquí)
+      // 3. Insertar log de salud
       const { error: insertError } = await supabase.from('health_checks').insert({
         site_id: site.id,
         latency: latency,
@@ -78,9 +78,15 @@ export async function runHealthCheck() {
 
       if (insertError) console.error(`❌ Error insertando log para ${site.name}:`, insertError.message);
 
-    } catch (err: any) {
+    } catch (err: unknown) {
       clearTimeout(timeoutId);
-      const errorMessage = err.name === 'AbortError' ? 'TIMEOUT_EXCEEDED' : (err.message || 'FETCH_FAILED');
+      
+      // FIX: Tipado seguro para el error sin usar 'any'
+      let errorMessage = 'FETCH_FAILED';
+      if (err instanceof Error) {
+        errorMessage = err.name === 'AbortError' ? 'TIMEOUT_EXCEEDED' : err.message;
+      }
+      
       console.log(`❌ ERROR en ${site.name}: ${errorMessage}`);
 
       if (site.status !== 'DOWN') {
@@ -122,8 +128,8 @@ async function sendAlert(site: SiteNode, errorMessage: string) {
         </div>
       `
     });
-  } catch (e) {
-    console.error('❌ Error Email:', e);
+  } catch (e: unknown) {
+    console.error('❌ Error Email:', e instanceof Error ? e.message : 'Unknown error');
   }
 }
 

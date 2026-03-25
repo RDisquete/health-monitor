@@ -42,13 +42,11 @@ export default async function HomePage() {
   const downSites = typedSites.filter(s => {
     const checks = s.health_checks;
     if (!checks || checks.length === 0) return false;
-    
-    // Ordenamos para asegurar el más reciente
+
     const sorted = [...checks].sort((a, b) => 
       new Date(b.checked_at).getTime() - new Date(a.checked_at).getTime()
     );
 
-    // FIX DEFINITIVO: Extraemos el primero y lo tratamos como HealthCheck individual
     const lastCheck = sorted as unknown as HealthCheck;
 
     if (!lastCheck || !lastCheck.status_code) return false;
