@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { supabase } from './supabase';
 import { Resend } from 'resend';
 
-// Vital para que dominios .es no den error instantáneo de SSL
+// Permite conectar con dominios .es sin que el SSL local bloquee la petición
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 interface SiteNode {
@@ -20,11 +20,11 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 async function checkSite(site: SiteNode, attempt = 1): Promise<{ latency: number, status: number, error?: string }> {
   const start = Date.now();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 25000); 
+  const timeoutId = setTimeout(() => controller.abort(), 25000); // 25 segundos de margen
 
   try {
     const cleanUrl = site.url.trim().replace(/\s/g, '');
-    // Cache busting para forzar latencia real
+    // Añadimos un timestamp para que la latencia sea REAL y no de caché
     const response = await fetch(`${cleanUrl}${cleanUrl.includes('?') ? '&' : '?'}t=${Date.now()}`, { 
       method: 'GET',
       signal: controller.signal,
@@ -36,9 +36,9 @@ async function checkSite(site: SiteNode, attempt = 1): Promise<{ latency: number
   } catch (err: unknown) {
     clearTimeout(timeoutId);
     
-    // Si falla el primer intento, esperamos y reintentamos
+    // Si falla a la primera, no entramos en pánico. Reintentamos.
     if (attempt < 2) { 
-      console.log(`⚠️ [${site.name}]: Reintentando (Intento ${attempt})...`);
+      console.log(`⚠️ [${site.name}]: Reintentando por inestabilidad...`);
       await wait(2000);
       return checkSite(site, attempt + 1); 
     }
@@ -47,45 +47,41 @@ async function checkSite(site: SiteNode, attempt = 1): Promise<{ latency: number
     return { 
       latency: Date.now() - start, 
       status: 0, 
-      error: isTimeout ? 'TIMEOUT' : (err instanceof Error ? err.message : 'DNS_ERROR') 
+      error: isTimeout ? 'TIMEOUT' : 'CONNECTION_ERROR' 
     };
   }
 }
 
 export async function runHealthCheck() {
-  console.log('🚀 INFRA.RD: Iniciando radar con filtro de falsos positivos...');
+  console.log('🚀 INFRA.RD: Iniciando radar con tolerancia a fallos de red...');
   
   const { data, error } = await supabase.from('sites').select('*').eq('is_active', true);
-  if (error || !data) {
-    console.error('❌ Error Supabase:', error?.message);
-    return;
-  }
+  if (error || !data) return;
 
   const sites = data as unknown as SiteNode[];
   
   const checks = sites.map(async (site) => {
     const result = await checkSite(site);
 
-    // Lógica inteligente para evitar mentiras en Supabase:
-    // Solo marcamos DOWN si el status es error de servidor (>=500) 
-    // O si el error NO es un TIMEOUT (porque el timeout suele ser culpa de GitHub, no de tu web)
+    // LA REGLA DE ORO: Solo es DOWN si el error es de servidor (>=500)
+    // Si es un TIMEOUT (status 0), lo registramos pero mantenemos el OK en Supabase
     const isActuallyDown = result.status >= 500 || (result.status === 0 && result.error !== 'TIMEOUT');
 
     if (isActuallyDown) {
       if (site.status !== 'DOWN') {
-        console.log(`🚨 FALLO REAL DETECTADO: ${site.name} (${result.error || result.status})`);
+        console.log(`🚨 FALLO REAL: ${site.name} (${result.error || result.status})`);
         await sendAlert(site, result.error || `HTTP_${result.status}`);
         await supabase.from('sites').update({ status: 'DOWN' }).eq('id', site.id);
       }
     } else {
-      // Si responde OK o incluso si da TIMEOUT, preferimos mantenerlo en OK o recuperarlo
+      // Si el sitio responde bien (200) o solo va lento (TIMEOUT), lo marcamos como OK
       if (site.status === 'DOWN') {
         console.log(`✅ RECUPERADO: ${site.name}`);
         await supabase.from('sites').update({ status: 'OK' }).eq('id', site.id);
       }
     }
 
-    // Guardamos el log de salud siempre para ver la gráfica
+    // Guardamos la métrica para que veas la gráfica moverse
     await supabase.from('health_checks').insert({
       site_id: site.id,
       latency: result.latency,
@@ -106,10 +102,9 @@ async function sendAlert(site: SiteNode, errorMessage: string) {
       subject: `🚨 ALERTA: ${site.name} DOWN`,
       html: `
         <div style="background:#0a0a0a; color:#eee; padding:20px; font-family:monospace; border:1px solid #333;">
-          <h2 style="color:#f43f5e; border-bottom:1px solid #f43f5e;">[NODE_FAILURE]</h2>
-          <p><strong>Sitio:</strong> ${site.name}</p>
-          <p><strong>Error:</strong> ${errorMessage}</p>
-          <p><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
+          <h2 style="color:#f43f5e;">[NODE_FAILURE_DETECTED]</h2>
+          <p><strong>NODO:</strong> ${site.name}</p>
+          <p><strong>ERROR:</strong> ${errorMessage}</p>
         </div>`
     });
   } catch { 
