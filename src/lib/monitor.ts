@@ -28,75 +28,78 @@ async function sendAlert(site: SiteNode, msg: string) {
   }
 }
 
-async function checkSite(site: SiteNode) {
+async function checkSite(site: SiteNode, attempt = 1): Promise<{ latency: number, status: number, error?: string }> {
   const start = Date.now();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s
+  const timeoutId = setTimeout(() => controller.abort(), 25000);
 
   try {
     const cleanUrl = site.url.trim().replace(/\s/g, '');
     const response = await fetch(`${cleanUrl}${cleanUrl.includes('?') ? '&' : '?'}t=${Date.now()}`, { 
       method: 'GET',
       signal: controller.signal,
-      headers: { 'User-Agent': 'InfraRD-Monitor/3.0' }
+      headers: { 
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+      }
     });
 
     clearTimeout(timeoutId);
-    const latency = Date.now() - start;
-
-    // Si responde (Cualquier status < 500), el servidor está vivo aunque GitHub Actions tarde.
-    if (response.status < 500) {
-      if (site.status === 'DOWN') {
-        console.log(`✅ RECUPERADO: ${site.name}`);
-        await supabase.from('sites').update({ status: 'OK' }).eq('id', site.id);
-      }
-    } else {
-       // Si es un error 500+, enviamos alerta real y marcamos DOWN
-       console.log(`🚨 ERROR CRÍTICO en ${site.name}: ${response.status}`);
-       await sendAlert(site, `HTTP_SERVER_ERROR_${response.status}`);
-       await supabase.from('sites').update({ status: 'DOWN' }).eq('id', site.id);
-    }
-
-    await supabase.from('health_checks').insert({
-      site_id: site.id,
-      latency: latency,
-      status_code: response.status
-    });
-
+    return { latency: Date.now() - start, status: response.status };
   } catch (err: unknown) {
     clearTimeout(timeoutId);
-    const latency = Date.now() - start;
-    const isTimeout = err instanceof Error && err.name === 'AbortError';
-    const errorMsg = isTimeout ? 'TIMEOUT' : 'FETCH_ERROR';
-
-    console.log(`⚠️ INFO: ${site.name} (${errorMsg}). No es una caída confirmada.`);
-
-    // Registramos métrica pero NO ponemos DOWN por ruido de red
-    await supabase.from('health_checks').insert({
-      site_id: site.id,
-      latency: latency,
-      status_code: 0
-    });
+    if (attempt < 2) { 
+      await wait(3000);
+      return checkSite(site, attempt + 1); 
+    }
+    return { 
+      latency: Date.now() - start, 
+      status: 0, 
+      error: err instanceof Error ? err.name : 'NET_ERROR' 
+    };
   }
 }
 
 export async function runHealthCheck() {
-  console.log('🚀 INFRA.RD: Modo Secuencial Activo...');
+  console.log('🚀 INFRA.RD: Modo Sinceridad Activo...');
   const { data } = await supabase.from('sites').select('*').eq('is_active', true);
   if (!data) return;
 
   const sites = data as unknown as SiteNode[];
 
-  // Ejecutamos uno a uno para evitar bloqueos de firewall
   for (const site of sites) {
-    await checkSite(site);
-    await wait(1000); 
-  }
+    const result = await checkSite(site);
 
-  console.log('✅ RADAR_UPDATE: Ciclo finalizado.');
+    // Si status >= 500 es un error de servidor real.
+    // Si status es 0 y NO es un timeout, es un fallo de red total.
+    const isActuallyDown = result.status >= 500 || (result.status === 0 && result.error !== 'AbortError');
+
+    if (isActuallyDown) {
+      if (site.status !== 'DOWN') {
+        console.log(`🚨 FALLO CONFIRMADO: ${site.name} (${result.error || result.status})`);
+        // Ahora sí usamos sendAlert para fallos de verdad, así ESLint no se queja
+        await sendAlert(site, result.error || `HTTP_${result.status}`);
+        await supabase.from('sites').update({ status: 'DOWN' }).eq('id', site.id);
+      }
+    } else {
+      if (site.status === 'DOWN') {
+        console.log(`✅ RECUPERADO: ${site.name} (Status: ${result.status})`);
+        await supabase.from('sites').update({ status: 'OK' }).eq('id', site.id);
+      }
+    }
+
+    await supabase.from('health_checks').insert({
+      site_id: site.id,
+      latency: result.latency,
+      status_code: result.status
+    });
+    
+    await wait(1000);
+  }
+  console.log('✅ Ciclo completado.');
   if (process.env.GITHUB_ACTIONS) process.exit(0);
 }
 
 if (process.env.GITHUB_ACTIONS || process.env.RUN_MONITOR === 'true') {
-  runHealthCheck().catch(() => console.error('Error en ejecución'));
+  runHealthCheck();
 }
