@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { supabase } from './supabase';
 
-// Vital para dominios .es y evitar bloqueos de certificados en Node
+// Vital para dominios .es y evitar bloqueos de certificados en entornos de servidor
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 interface SiteNode {
@@ -25,7 +25,7 @@ async function checkSite(site: SiteNode, attempt = 1): Promise<{ latency: number
       method: 'GET',
       signal: controller.signal,
       headers: { 
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Cache-Control': 'no-cache'
       }
     });
@@ -35,8 +35,8 @@ async function checkSite(site: SiteNode, attempt = 1): Promise<{ latency: number
   } catch (err: unknown) {
     clearTimeout(timeoutId);
     if (attempt < 2) { 
-      console.log(`⚠️  [${site.name}]: Reintentando (Intento ${attempt})...`);
-      await wait(2000);
+      console.log(`  ⚠️  [${site.name}]: Reintentando conexión (Intento ${attempt})...`);
+      await wait(3000);
       return checkSite(site, attempt + 1); 
     }
     const errorName = err instanceof Error ? err.name : 'NET_ERROR';
@@ -49,51 +49,70 @@ async function checkSite(site: SiteNode, attempt = 1): Promise<{ latency: number
 }
 
 export async function runHealthCheck() {
-  console.log('🚀 INFRA.RD: Iniciando escaneo secuencial...');
+  console.log('🚀 INFRA.RD: Iniciando radar de sinceridad secuencial...');
   
-  const { data, error } = await supabase.from('sites').select('*').eq('is_active', true);
-  if (error || !data) return;
+  const { data, error } = await supabase
+    .from('sites')
+    .select('*')
+    .eq('is_active', true);
+
+  if (error || !data) {
+    console.error('❌ Error crítico: No se pudieron cargar los sitios de Supabase.');
+    return;
+  }
 
   const sites = data as unknown as SiteNode[];
-  console.log(`📡 RADAR: Analizando ${sites.length} servicios.`);
+  console.log(`📡 RADAR: Analizando un total de ${sites.length} servicios activos.`);
 
+  let index = 1;
   for (const site of sites) {
+    console.log(`\n[${index}/${sites.length}] 🔍 Verificando: ${site.name}...`);
+    
     const result = await checkSite(site);
     
-    // Solo marcamos DOWN si el status es un error de servidor (500+)
+    // LÓGICA DE ESTADO: 
+    // Solo marcamos DOWN si el servidor responde un error real de infraestructura (500+)
     const isActuallyDown = result.status >= 500;
 
     if (isActuallyDown) {
+      console.log(`  ❌ FALLO DE SERVIDOR: ${site.name} (Status: ${result.status})`);
       if (site.status !== 'DOWN') {
-        console.log(`🚨 [${site.name}]: FALLO CONFIRMADO (${result.status})`);
         await supabase.from('sites').update({ status: 'DOWN' }).eq('id', site.id);
       }
     } else {
-      // Si hay respuesta (aunque sea lenta o timeout), mantenemos el OK
+      // Si status > 0 (200, 403, 404, etc), el servidor RESPONDE, por tanto está vivo.
       if (result.status > 0) {
-        console.log(`📡 [${site.name}]: ONLINE (${result.status}) - ${result.latency}ms`);
+        console.log(`  ✅ ONLINE: ${site.name} (Status: ${result.status}) - ${result.latency}ms`);
         if (site.status === 'DOWN') {
+          console.log(`  ♻️  RECUPERANDO estado en Supabase...`);
           await supabase.from('sites').update({ status: 'OK' }).eq('id', site.id);
         }
       } else {
-        console.log(`⚠️  [${site.name}]: Red inestable (${result.error}), ignorando cambio.`);
+        // Status 0: Error de red o Timeout. No cambiamos estado para evitar falsos positivos.
+        console.log(`  ⚠️  RED INESTABLE: ${site.name} (${result.error}). Manteniendo estado previo.`);
       }
     }
 
-    // Guardar métrica en historial
+    // Guardamos la métrica en el historial para las gráficas del Dashboard
     await supabase.from('health_checks').insert({
       site_id: site.id,
       latency: result.latency,
       status_code: result.status
     });
 
-    await wait(1000);
+    index++;
+    // Pausa de 1.5s entre sitios para evitar bloqueos por rate-limiting
+    await wait(1500); 
   }
 
-  console.log('✅ RADAR_UPDATE: Ciclo finalizado.');
+  console.log('\n✅ RADAR_UPDATE: Escaneo completo de todos los servicios.');
   if (process.env.GITHUB_ACTIONS) process.exit(0);
 }
 
+// Control de ejecución automática
 if (process.env.GITHUB_ACTIONS || process.env.RUN_MONITOR === 'true') {
-  runHealthCheck().catch(() => console.error('Error en ejecución'));
+  runHealthCheck().catch((err) => {
+    console.error('❌ Error fatal en la ejecución del radar:', err);
+    process.exit(1);
+  });
 }
