@@ -1,8 +1,7 @@
 import 'dotenv/config';
 import { supabase } from './supabase';
-import { Resend } from 'resend';
 
-// Necesario para evitar errores de certificados en dominios .es
+// Vital para dominios .es y evitar bloqueos de certificados en Node
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 interface SiteNode {
@@ -13,25 +12,7 @@ interface SiteNode {
   status: string;
 }
 
-const resend = new Resend(process.env.RESEND_API_KEY);
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-async function sendAlert(site: SiteNode, msg: string) {
-  try {
-    await resend.emails.send({
-      from: 'InfraRD Monitor <onboarding@resend.dev>',
-      to: 'rafael.doradozamoro@gmail.com', 
-      subject: `🚨 ALERTA REAL: ${site.name} DOWN`,
-      html: `<div style="font-family:monospace;padding:20px;border:1px solid #333;">
-               <h2 style="color:#f43f5e;">[CRITICAL_FAILURE]</h2>
-               <p><strong>Sitio:</strong> ${site.name}</p>
-               <p><strong>Mensaje:</strong> ${msg}</p>
-             </div>`
-    });
-  } catch { 
-    console.error('❌ Fallo al enviar email'); 
-  }
-}
 
 async function checkSite(site: SiteNode, attempt = 1): Promise<{ latency: number, status: number, error?: string }> {
   const start = Date.now();
@@ -44,8 +25,7 @@ async function checkSite(site: SiteNode, attempt = 1): Promise<{ latency: number
       method: 'GET',
       signal: controller.signal,
       headers: { 
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36',
         'Cache-Control': 'no-cache'
       }
     });
@@ -55,11 +35,11 @@ async function checkSite(site: SiteNode, attempt = 1): Promise<{ latency: number
   } catch (err: unknown) {
     clearTimeout(timeoutId);
     if (attempt < 2) { 
-      console.log(`⚠️ [${site.name}]: Reintentando conexión...`);
-      await wait(3000);
+      console.log(`⚠️  [${site.name}]: Reintentando (Intento ${attempt})...`);
+      await wait(2000);
       return checkSite(site, attempt + 1); 
     }
-    const errorName = err instanceof Error ? err.name : 'UNKNOWN_ERROR';
+    const errorName = err instanceof Error ? err.name : 'NET_ERROR';
     return { 
       latency: Date.now() - start, 
       status: 0, 
@@ -69,53 +49,51 @@ async function checkSite(site: SiteNode, attempt = 1): Promise<{ latency: number
 }
 
 export async function runHealthCheck() {
-  console.log('🚀 INFRA.RD: Ejecutando radar de sinceridad secuencial...');
+  console.log('🚀 INFRA.RD: Iniciando escaneo secuencial...');
   
   const { data, error } = await supabase.from('sites').select('*').eq('is_active', true);
   if (error || !data) return;
 
   const sites = data as unknown as SiteNode[];
+  console.log(`📡 RADAR: Analizando ${sites.length} servicios.`);
 
   for (const site of sites) {
     const result = await checkSite(site);
-
-    // NUEVA LÓGICA:
-    // Solo es DOWN si el servidor responde un error 500+ (el servidor está roto).
-    // Si da 0 (fallo de red) pero NO es timeout, sospechamos del firewall de GitHub y NO lo damos por muerto.
+    
+    // Solo marcamos DOWN si el status es un error de servidor (500+)
     const isActuallyDown = result.status >= 500;
 
     if (isActuallyDown) {
       if (site.status !== 'DOWN') {
-        console.log(`🚨 FALLO CONFIRMADO: ${site.name} (Status: ${result.status})`);
-        await sendAlert(site, `Error de servidor: ${result.status}`);
+        console.log(`🚨 [${site.name}]: FALLO CONFIRMADO (${result.status})`);
         await supabase.from('sites').update({ status: 'DOWN' }).eq('id', site.id);
       }
     } else {
-      // Si status es 200, 403, 404... el servidor RESPONDE, por tanto está UP.
-      // Si es un status 0 (Network error), mantenemos el estado anterior para no mentir.
-      if (result.status > 0 && site.status === 'DOWN') {
-        console.log(`✅ RECUPERADO: ${site.name}`);
-        await supabase.from('sites').update({ status: 'OK' }).eq('id', site.id);
-      } else if (result.status > 0) {
-        console.log(`📡 [${site.name}]: ONLINE (${result.status})`);
+      // Si hay respuesta (aunque sea lenta o timeout), mantenemos el OK
+      if (result.status > 0) {
+        console.log(`📡 [${site.name}]: ONLINE (${result.status}) - ${result.latency}ms`);
+        if (site.status === 'DOWN') {
+          await supabase.from('sites').update({ status: 'OK' }).eq('id', site.id);
+        }
       } else {
-        console.log(`⚠️ [${site.name}]: Red inestable (${result.error}), ignorando cambio de estado.`);
+        console.log(`⚠️  [${site.name}]: Red inestable (${result.error}), ignorando cambio.`);
       }
     }
 
+    // Guardar métrica en historial
     await supabase.from('health_checks').insert({
       site_id: site.id,
       latency: result.latency,
       status_code: result.status
     });
 
-    await wait(1500); // Pausa de seguridad entre sitios
+    await wait(1000);
   }
 
-  console.log('✅ Ciclo finalizado.');
+  console.log('✅ RADAR_UPDATE: Ciclo finalizado.');
   if (process.env.GITHUB_ACTIONS) process.exit(0);
 }
 
 if (process.env.GITHUB_ACTIONS || process.env.RUN_MONITOR === 'true') {
-  runHealthCheck();
+  runHealthCheck().catch(() => console.error('Error en ejecución'));
 }
