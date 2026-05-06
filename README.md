@@ -1,35 +1,61 @@
-# 📡 INFRA.RD // Infrastructure Health Monitor
+# 📡 INFRA.RD — Infrastructure Health Monitor
 
-> **Sistema autónomo de monitorización y vigilancia de servicios web.** > Desarrollado por **rdiquete** para garantizar la alta disponibilidad de nodos críticos mediante flujos automatizados.
+Sistema de monitorización de servicios web diseñado para detectar caídas, degradación de rendimiento y reaccionar automáticamente sin intervención manual.
 
----
-
-## 🛠️ Stack Tecnológico
-* **Framework:** [Next.js 14](https://nextjs.org/) (App Router)
-* **Estilo:** [Tailwind CSS](https://tailwindcss.com/) (Industrial Dark UI)
-* **Base de Datos:** [Supabase](https://supabase.com/) (PostgreSQL + Real-time)
-* **Notificaciones:** [Resend](https://resend.com/) (Email API)
-* **Testing:** [Vitest](https://vitest.dev/) (Suite de Resiliencia)
-* **Automatización:** [GitHub Actions](https://github.com/features/actions) (Cron-jobs)
+Construido como herramienta real para supervisar múltiples endpoints de forma fiable.
 
 ---
 
-## 🚀 Características Principales
-- **Health-Check Automático:** Escaneo programado cada 30 minutos de todos los servicios activos.
-- **Alertas Críticas:** Envío inmediato de reportes vía Resend en caso de detectar un status `DOWN` (500, 404, etc.).
-- **Análisis de Latencia:** Registro histórico de tiempos de respuesta para detectar degradación de servicios.
-- **Interfaz Industrial:** Dashboard minimalista diseñado para una lectura técnica rápida de métricas.
+## 🎯 Contexto
+
+Necesidad de monitorizar servicios web sin depender de herramientas externas y con control total sobre alertas, latencia y comportamiento del sistema.
+
+El objetivo era tener visibilidad real del estado de los servicios y reducir el tiempo de reacción ante fallos.
 
 ---
 
-## 🛡️ Control de Calidad (Testing)
-El sistema implementa una suite de pruebas de resiliencia con **Vitest** para asegurar el comportamiento del monitor ante diversos escenarios de red:
+## ⚠️ Problema
 
-- [x] **ESCENARIO_OK:** Validación de registro de latencia en nodos estables (HTTP 200).
-- [x] **ESCENARIO_DOWN:** Verificación de disparo de alertas ante fallos de servidor (HTTP 5xx).
-- [x] **ESCENARIO_CRITICAL:** Manejo robusto de excepciones ante fallos totales de red (DNS/Timeout).
+- Supervisión manual poco fiable  
+- Falta de visibilidad sobre latencia y degradación progresiva  
+- Dependencia de herramientas externas poco flexibles  
+- Tiempo de reacción alto ante caídas  
 
-```bash
+---
+
+## 🧠 Solución
+
+- Sistema de health-check automatizado mediante cron jobs  
+- Registro de latencia en base de datos para análisis histórico  
+- Alertas automáticas por email ante estados críticos  
+- Separación entre motor de monitorización y UI  
+- Testing de escenarios reales (OK / DOWN / TIMEOUT)  
+- Dashboard técnico para lectura rápida  
+
+---
+
+## ⚙️ Stack
+
+Next.js (App Router) · TypeScript · Tailwind CSS · Supabase · Resend · Vitest · GitHub Actions
+
+---
+
+## 🚀 Resultado
+
+Sistema capaz de monitorizar múltiples servicios en paralelo, registrar su comportamiento y alertar automáticamente ante incidencias sin intervención manual.
+
+---
+
+## 📊 Impacto
+
+- Reducción del tiempo de detección de fallos  
+- Automatización completa del proceso de monitorización  
+- Visibilidad clara de degradación de rendimiento  
+- Sistema reutilizable para múltiples proyectos  
+
+---
+
+## 🔧 Arquitectura
 # Ejecutar la suite de pruebas
 npm test
 
